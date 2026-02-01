@@ -24,7 +24,10 @@ export default async function SettingsAiPage() {
         openrouter_system_prompt,
         openrouter_flashcard_prompt,
         openrouter_params,
-        ai_language_lock_enabled
+        ai_language_lock_enabled,
+        ai_provider,
+        cerebras_api_key,
+        groq_api_key
       from users
       where id = $1
       limit 1
@@ -34,14 +37,17 @@ export default async function SettingsAiPage() {
 
   const row = settingsRes.rows[0] as
     | {
-        openrouter_api_key: string | null;
-        openrouter_model: string | null;
-        openrouter_only_free_models: boolean;
-        openrouter_system_prompt: string;
-        openrouter_flashcard_prompt: string;
-        openrouter_params: unknown;
-        ai_language_lock_enabled: boolean;
-      }
+      openrouter_api_key: string | null;
+      openrouter_model: string | null;
+      openrouter_only_free_models: boolean;
+      openrouter_system_prompt: string;
+      openrouter_flashcard_prompt: string;
+      openrouter_params: unknown;
+      ai_language_lock_enabled: boolean;
+      ai_provider: string | null;
+      cerebras_api_key: string | null;
+      groq_api_key: string | null;
+    }
     | undefined;
 
   const paramsRaw = (row as any)?.openrouter_params;
@@ -50,7 +56,10 @@ export default async function SettingsAiPage() {
 
   return (
     <AiSettingsView
+      aiProvider={(row?.ai_provider as "openrouter" | "cerebras" | "groq") ?? "openrouter"}
       openrouterApiKey={row?.openrouter_api_key ?? ""}
+      cerebrasApiKey={row?.cerebras_api_key ?? ""}
+      groqApiKey={row?.groq_api_key ?? ""}
       openrouterModel={row?.openrouter_model ?? ""}
       openrouterOnlyFreeModels={Boolean(row?.openrouter_only_free_models ?? true)}
       openrouterSystemPrompt={normalizeOpenrouterSystemPrompt(row?.openrouter_system_prompt)}

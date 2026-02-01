@@ -2,14 +2,17 @@ import "server-only";
 
 import { findAvailableDeckNameForUser } from "@/server/deck-import";
 import { getPool } from "@/server/db";
+import { decrypt } from "@/server/encryption";
 import { publishUserEvent } from "@/server/events";
 import { extractJsonObjectAt, parseJsonLenient, tryExtractJsonStringValue } from "@/server/ai-json";
 import { serverLog } from "@/server/log";
 import {
-  getOpenRouterModels,
-  openRouterChatCompletionStream,
-  type OpenRouterChatCompletionParams,
-} from "@/server/openrouter";
+  aiChatCompletionStream,
+  normalizeAiProvider,
+  type AiChatCompletionParams,
+  type AiProvider,
+} from "@/server/ai-provider";
+import { getOpenRouterModels } from "@/server/openrouter";
 import { normalizeAiFlashcard, normalizeAiFlashcardEdit } from "@/server/ai-flashcards";
 import { deckNameSchema } from "@/shared/validation";
 import { normalizeUiLanguage, uiLanguageName } from "@/shared/i18n";
@@ -36,12 +39,12 @@ function fallbackDeckName(prompt: string) {
   return cleaned.length > 64 ? cleaned.slice(0, 64).trim() : cleaned;
 }
 
-function normalizeUserOpenrouterParams(raw: unknown): OpenRouterChatCompletionParams {
+function normalizeUserOpenrouterParams(raw: unknown): AiChatCompletionParams {
   const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as any) : {};
 
-  const out: OpenRouterChatCompletionParams = {};
+  const out: AiChatCompletionParams = {};
 
-  const copyNumber = (key: keyof OpenRouterChatCompletionParams) => {
+  const copyNumber = (key: keyof AiChatCompletionParams) => {
     const value = obj[key];
     if (value === null || value === undefined) {
       return;
@@ -66,8 +69,8 @@ function normalizeUserOpenrouterParams(raw: unknown): OpenRouterChatCompletionPa
 
 async function filterSupportedParamsForModel(
   model: string,
-  params: OpenRouterChatCompletionParams,
-): Promise<OpenRouterChatCompletionParams> {
+  params: AiChatCompletionParams,
+): Promise<AiChatCompletionParams> {
   const modelsRes = await getOpenRouterModels({ freeOnly: false });
   if (!modelsRes.ok) {
     return {};
@@ -79,7 +82,7 @@ async function filterSupportedParamsForModel(
   }
   const supportedSet = new Set(supported);
 
-  const filtered: OpenRouterChatCompletionParams = {};
+  const filtered: AiChatCompletionParams = {};
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined) {
       continue;
@@ -90,6 +93,43 @@ async function filterSupportedParamsForModel(
     (filtered as any)[key] = value;
   }
   return filtered;
+}
+
+async function loadUserProviderSettings(userId: string) {
+  const pool = getPool();
+  const res = await pool.query(
+    `select ai_provider, openrouter_api_key, cerebras_api_key, groq_api_key, openrouter_params, ui_language, ai_language_lock_enabled from users where id = $1 limit 1`,
+    [userId],
+  );
+  const row = res.rows[0] as
+    | {
+      ai_provider: string | null;
+      openrouter_api_key: string | null;
+      cerebras_api_key: string | null;
+      groq_api_key: string | null;
+      openrouter_params?: unknown;
+      ui_language?: unknown;
+      ai_language_lock_enabled?: unknown;
+    }
+    | undefined;
+
+  const provider = normalizeAiProvider(row?.ai_provider);
+
+  let encryptedKey: string | null = null;
+  if (provider === "cerebras") {
+    encryptedKey = row?.cerebras_api_key ?? null;
+  } else if (provider === "groq") {
+    encryptedKey = row?.groq_api_key ?? null;
+  } else {
+    encryptedKey = row?.openrouter_api_key ?? null;
+  }
+
+  const apiKey = decrypt(encryptedKey ?? "");
+  const uiLanguage = normalizeUiLanguage(row?.ui_language);
+  const languageLockEnabled = row?.ai_language_lock_enabled !== false;
+  const params = row?.openrouter_params;
+
+  return { provider, apiKey, uiLanguage, languageLockEnabled, params };
 }
 
 async function loadAiDeckJobLogSettings(userId: string) {
@@ -237,22 +277,25 @@ async function claimJob(jobId: string) {
       where id = $1
         and status = 'queued'
         and attempt_count < $2
-      returning user_id, deck_id, job_type, prompt, model, system_prompt, flashcard_prompt, attempt_count
+      returning user_id, deck_id, job_type, prompt, model, system_prompt, flashcard_prompt, attempt_count, source_type, source_name, source_content
     `,
     [jobId, MAX_JOB_ATTEMPTS],
   );
 
   const row = res.rows[0] as
     | {
-        user_id: string;
-        deck_id: string | null;
-        job_type: string | null;
-        prompt: string;
-        model: string;
-        system_prompt: string;
-        flashcard_prompt: string;
-        attempt_count: number;
-      }
+      user_id: string;
+      deck_id: string | null;
+      job_type: string | null;
+      prompt: string;
+      model: string;
+      system_prompt: string;
+      flashcard_prompt: string;
+      attempt_count: number;
+      source_type: string | null;
+      source_name: string | null;
+      source_content: string | null;
+    }
     | undefined;
   if (!row) {
     return null;
@@ -268,6 +311,9 @@ async function claimJob(jobId: string) {
     systemPrompt: String(row.system_prompt),
     flashcardPrompt: String(row.flashcard_prompt),
     attempt: Math.max(1, Number(row.attempt_count ?? 1)),
+    sourceType: row.source_type as "pdf" | "youtube" | null,
+    sourceName: row.source_name ?? null,
+    sourceContent: row.source_content ?? null,
   };
 }
 
@@ -275,7 +321,7 @@ async function loadJob(jobId: string) {
   const pool = getPool();
   const res = await pool.query(
     `
-      select id, user_id, deck_id, job_type, prompt, model, system_prompt, flashcard_prompt, attempt_count, status
+      select id, user_id, deck_id, job_type, prompt, model, system_prompt, flashcard_prompt, attempt_count, status, source_type, source_name, source_content
       from ai_deck_jobs
       where id = $1
       limit 1
@@ -284,17 +330,20 @@ async function loadJob(jobId: string) {
   );
   const row = res.rows[0] as
     | {
-        id: string;
-        user_id: string;
-        deck_id: string | null;
-        job_type: string | null;
-        prompt: string;
-        model: string;
-        system_prompt: string;
-        flashcard_prompt: string;
-        attempt_count: number;
-        status: "queued" | "running" | "succeeded" | "failed";
-      }
+      id: string;
+      user_id: string;
+      deck_id: string | null;
+      job_type: string | null;
+      prompt: string;
+      model: string;
+      system_prompt: string;
+      flashcard_prompt: string;
+      attempt_count: number;
+      status: "queued" | "running" | "succeeded" | "failed";
+      source_type: string | null;
+      source_name: string | null;
+      source_content: string | null;
+    }
     | undefined;
   if (!row) {
     return null;
@@ -316,6 +365,9 @@ async function loadJob(jobId: string) {
     flashcardPrompt: String(row.flashcard_prompt),
     attempt: Math.max(1, Number(row.attempt_count ?? 0)),
     status,
+    sourceType: row.source_type as "pdf" | "youtube" | null,
+    sourceName: row.source_name ?? null,
+    sourceContent: row.source_content ?? null,
   };
 }
 
@@ -382,29 +434,16 @@ async function processAddFlashcardsJob(job: {
     flashcardPromptLength: job.flashcardPrompt.length,
   });
 
-  const userRes = await pool.query(
-    "select openrouter_api_key, openrouter_params, ui_language, ai_language_lock_enabled from users where id = $1 limit 1",
-    [job.userId],
-  );
-  const userRow = userRes.rows[0] as
-    | {
-        openrouter_api_key: string | null;
-        openrouter_params?: unknown;
-        ui_language?: unknown;
-        ai_language_lock_enabled?: unknown;
-      }
-    | undefined;
-  const apiKey = userRow?.openrouter_api_key ?? "";
+  const userSettings = await loadUserProviderSettings(job.userId);
+  const { provider, apiKey, uiLanguage, languageLockEnabled } = userSettings;
   if (!apiKey || apiKey.trim().length === 0) {
-    await failJob(job.id, job.userId, "missing openrouter api key (set it in settings)");
+    await failJob(job.id, job.userId, `missing ${provider} api key (set it in settings)`);
     return;
   }
 
-  const uiLanguage = normalizeUiLanguage(userRow?.ui_language);
-  const languageLockEnabled = userRow?.ai_language_lock_enabled !== false;
   const params = await filterSupportedParamsForModel(
     job.model,
-    normalizeUserOpenrouterParams(userRow?.openrouter_params),
+    normalizeUserOpenrouterParams(userSettings.params),
   );
 
   const deckRes = await pool.query(
@@ -484,9 +523,9 @@ async function processAddFlashcardsJob(job: {
     ...systemParts,
     ...(languageLockEnabled
       ? [
-          `language lock: output all flashcard text in ${uiLanguageName(uiLanguage)} only.`,
-          "do not use any other language in front/back/options.",
-        ]
+        `language lock: output all flashcard text in ${uiLanguageName(uiLanguage)} only.`,
+        "do not use any other language in front/back/options.",
+      ]
       : []),
     "you are adding flashcards to an existing deck.",
     "the user message contains the full deck context including existing flashcards. do not create duplicates.",
@@ -499,7 +538,8 @@ async function processAddFlashcardsJob(job: {
     `request: ${job.prompt.trim()}`,
   ].join("\n\n");
 
-  const completion = await openRouterChatCompletionStream({
+  const completion = await aiChatCompletionStream({
+    provider,
     apiKey,
     model: job.model,
     messages: [
@@ -656,16 +696,16 @@ async function processAddFlashcardsJob(job: {
               card.p5Height,
             ],
           );
-            const rowCount = insertRes.rowCount ?? 0;
-            if (rowCount > 0) {
-              inserted += 1;
-              if (card.kind === "mcq") {
-                insertedMcq += 1;
-              } else {
-                insertedBasic += 1;
-              }
-              if (sampleInserted.length < 25) {
-                sampleInserted.push({ kind: card.kind, front: card.front.slice(0, 200) });
+          const rowCount = insertRes.rowCount ?? 0;
+          if (rowCount > 0) {
+            inserted += 1;
+            if (card.kind === "mcq") {
+              insertedMcq += 1;
+            } else {
+              insertedBasic += 1;
+            }
+            if (sampleInserted.length < 25) {
+              sampleInserted.push({ kind: card.kind, front: card.front.slice(0, 200) });
             }
             publishDecksChanged(false);
             if (inserted % 100 === 0) {
@@ -785,29 +825,16 @@ async function processEditFlashcardsJob(job: {
     flashcardPromptLength: job.flashcardPrompt.length,
   });
 
-  const userRes = await pool.query(
-    "select openrouter_api_key, openrouter_params, ui_language, ai_language_lock_enabled from users where id = $1 limit 1",
-    [job.userId],
-  );
-  const userRow = userRes.rows[0] as
-    | {
-        openrouter_api_key: string | null;
-        openrouter_params?: unknown;
-        ui_language?: unknown;
-        ai_language_lock_enabled?: unknown;
-      }
-    | undefined;
-  const apiKey = userRow?.openrouter_api_key ?? "";
+  const userSettings = await loadUserProviderSettings(job.userId);
+  const { provider, apiKey, uiLanguage, languageLockEnabled } = userSettings;
   if (!apiKey || apiKey.trim().length === 0) {
-    await failJob(job.id, job.userId, "missing openrouter api key (set it in settings)");
+    await failJob(job.id, job.userId, `missing ${provider} api key (set it in settings)`);
     return;
   }
 
-  const uiLanguage = normalizeUiLanguage(userRow?.ui_language);
-  const languageLockEnabled = userRow?.ai_language_lock_enabled !== false;
   const params = await filterSupportedParamsForModel(
     job.model,
-    normalizeUserOpenrouterParams(userRow?.openrouter_params),
+    normalizeUserOpenrouterParams(userSettings.params),
   );
 
   const deckRes = await pool.query(
@@ -889,9 +916,9 @@ async function processEditFlashcardsJob(job: {
     ...systemParts,
     ...(languageLockEnabled
       ? [
-          `language lock: output all flashcard text in ${uiLanguageName(uiLanguage)} only.`,
-          "do not use any other language in front/back/options.",
-        ]
+        `language lock: output all flashcard text in ${uiLanguageName(uiLanguage)} only.`,
+        "do not use any other language in front/back/options.",
+      ]
       : []),
     "you are editing flashcards in an existing deck.",
     "the user message contains the full deck context including existing flashcards with ids.",
@@ -906,7 +933,8 @@ async function processEditFlashcardsJob(job: {
     `request: ${job.prompt.trim()}`,
   ].join("\n\n");
 
-  const completion = await openRouterChatCompletionStream({
+  const completion = await aiChatCompletionStream({
+    provider,
     apiKey,
     model: job.model,
     messages: [
@@ -1164,29 +1192,16 @@ async function processCreateDeckJob(job: {
     flashcardPromptLength: job.flashcardPrompt.length,
   });
 
-  const userRes = await pool.query(
-    "select openrouter_api_key, openrouter_params, ui_language, ai_language_lock_enabled from users where id = $1 limit 1",
-    [job.userId],
-  );
-  const userRow = userRes.rows[0] as
-    | {
-        openrouter_api_key: string | null;
-        openrouter_params?: unknown;
-        ui_language?: unknown;
-        ai_language_lock_enabled?: unknown;
-      }
-    | undefined;
-  const apiKey = userRow?.openrouter_api_key ?? "";
+  const userSettings = await loadUserProviderSettings(job.userId);
+  const { provider, apiKey, uiLanguage, languageLockEnabled } = userSettings;
   if (!apiKey || apiKey.trim().length === 0) {
-    await failJob(job.id, job.userId, "missing openrouter api key (set it in settings)");
+    await failJob(job.id, job.userId, `missing ${provider} api key (set it in settings)`);
     return;
   }
 
-  const uiLanguage = normalizeUiLanguage(userRow?.ui_language);
-  const languageLockEnabled = userRow?.ai_language_lock_enabled !== false;
   const params = await filterSupportedParamsForModel(
     job.model,
-    normalizeUserOpenrouterParams(userRow?.openrouter_params),
+    normalizeUserOpenrouterParams(userSettings.params),
   );
 
   const systemParts = [job.systemPrompt.trim(), job.flashcardPrompt.trim()].filter(
@@ -1196,14 +1211,15 @@ async function processCreateDeckJob(job: {
     ...systemParts,
     ...(languageLockEnabled
       ? [
-          `language lock: output all flashcard text in ${uiLanguageName(uiLanguage)} only.`,
-          "do not use any other language in front/back/options.",
-        ]
+        `language lock: output all flashcard text in ${uiLanguageName(uiLanguage)} only.`,
+        "do not use any other language in front/back/options.",
+      ]
       : []),
     'output must be valid json only. ensure json begins with {"name":',
   ].join("\n\n");
 
-  const completion = await openRouterChatCompletionStream({
+  const completion = await aiChatCompletionStream({
+    provider,
     apiKey,
     model: job.model,
     messages: [
@@ -1517,7 +1533,15 @@ async function processJob(job: {
   systemPrompt: string;
   flashcardPrompt: string;
   attempt: number;
+  sourceType: "pdf" | "youtube" | null;
+  sourceName: string | null;
+  sourceContent: string | null;
 }) {
+  // combine source content with user prompt if present
+  const effectivePrompt = job.sourceContent
+    ? `source content:\n\n${job.sourceContent}\n\nuser request:\n\n${job.prompt}`
+    : job.prompt;
+
   if (job.jobType === "add_flashcards") {
     const deckId = job.deckId;
     if (!deckId) {
@@ -1528,7 +1552,7 @@ async function processJob(job: {
       id: job.id,
       userId: job.userId,
       deckId,
-      prompt: job.prompt,
+      prompt: effectivePrompt,
       model: job.model,
       systemPrompt: job.systemPrompt,
       flashcardPrompt: job.flashcardPrompt,
@@ -1547,7 +1571,7 @@ async function processJob(job: {
       id: job.id,
       userId: job.userId,
       deckId,
-      prompt: job.prompt,
+      prompt: effectivePrompt,
       model: job.model,
       systemPrompt: job.systemPrompt,
       flashcardPrompt: job.flashcardPrompt,
@@ -1559,7 +1583,7 @@ async function processJob(job: {
   await processCreateDeckJob({
     id: job.id,
     userId: job.userId,
-    prompt: job.prompt,
+    prompt: effectivePrompt,
     model: job.model,
     systemPrompt: job.systemPrompt,
     flashcardPrompt: job.flashcardPrompt,
@@ -1588,16 +1612,19 @@ async function runJob(jobId: string) {
     loaded.status === "queued"
       ? await claimJob(jobId)
       : {
-          id: loaded.id,
-          userId: loaded.userId,
-          deckId: loaded.deckId,
-          jobType: loaded.jobType,
-          prompt: loaded.prompt,
-          model: loaded.model,
-          systemPrompt: loaded.systemPrompt,
-          flashcardPrompt: loaded.flashcardPrompt,
-          attempt: loaded.attempt,
-        };
+        id: loaded.id,
+        userId: loaded.userId,
+        deckId: loaded.deckId,
+        jobType: loaded.jobType,
+        prompt: loaded.prompt,
+        model: loaded.model,
+        systemPrompt: loaded.systemPrompt,
+        flashcardPrompt: loaded.flashcardPrompt,
+        attempt: loaded.attempt,
+        sourceType: loaded.sourceType,
+        sourceName: loaded.sourceName,
+        sourceContent: loaded.sourceContent,
+      };
 
   if (!job) {
     const current = await loadJob(jobId);

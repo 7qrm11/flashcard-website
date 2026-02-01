@@ -13,10 +13,19 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+const THEME_MODE_COOKIE = "theme_mode";
+
 export const metadata: Metadata = {
   title: "website",
   description: "nextjs + postgres",
 };
+
+function normalizeThemeMode(value: unknown): ThemeMode {
+  if (value === "dark") {
+    return "dark";
+  }
+  return "light";
+}
 
 export default async function RootLayout({
   children,
@@ -24,7 +33,7 @@ export default async function RootLayout({
   children: ReactNode;
 }>) {
   const user = await getCurrentUser();
-  const mode: ThemeMode = user?.themeMode ?? "light";
+  const mode: ThemeMode = user?.themeMode ?? normalizeThemeMode(cookies().get(THEME_MODE_COOKIE)?.value);
   const loggingEnabled = user?.loggingEnabled ?? false;
   const lang = user?.uiLanguage ?? normalizeUiLanguage(cookies().get(UI_LANGUAGE_COOKIE)?.value);
 

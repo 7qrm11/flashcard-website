@@ -19,17 +19,17 @@ const kindSchema = z.string().max(32).optional();
 
 const aiFlashcardSchema = z
   .object({
-    front: z.string().max(4000),
-    back: z.string().max(4000),
+    front: z.string().max(50000),
+    back: z.string().max(50000),
     kind: kindSchema,
     type: kindSchema,
     mcq: z
       .object({
-        options: z.array(z.string().max(4000)).min(2).max(8),
+        options: z.array(z.string().max(50000)).min(2).max(8),
         correctIndex: z.number().int().min(0).max(7),
       })
       .optional(),
-    choices: z.array(z.string().max(4000)).min(2).max(8).optional(),
+    choices: z.array(z.string().max(50000)).min(2).max(8).optional(),
     correctIndex: z.number().int().min(0).max(7).optional(),
     answerIndex: z.number().int().min(0).max(7).optional(),
     p5: z
@@ -79,8 +79,8 @@ function normalizeMcq(value: {
     ? rawOptions
     : rawOptions && typeof rawOptions === "object"
       ? Object.entries(rawOptions as Record<string, unknown>)
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([, v]) => v)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([, v]) => v)
       : null;
 
   if (!optionsArray) {

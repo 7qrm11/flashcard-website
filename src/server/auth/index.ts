@@ -134,7 +134,7 @@ export function setSessionCookie(
 ) {
   res.cookies.set(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
-    sameSite: "lax",
+    sameSite: "strict",
     secure: process.env.NODE_ENV === "production",
     path: "/",
     expires: expiresAt,
@@ -144,7 +144,7 @@ export function setSessionCookie(
 export function clearSessionCookie(res: NextResponse) {
   res.cookies.set(SESSION_COOKIE_NAME, "", {
     httpOnly: true,
-    sameSite: "lax",
+    sameSite: "strict",
     secure: process.env.NODE_ENV === "production",
     path: "/",
     expires: new Date(0),

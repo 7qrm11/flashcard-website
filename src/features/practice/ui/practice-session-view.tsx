@@ -8,7 +8,7 @@ import { Box, Button, Divider, Paper, Stack, Typography } from "@mui/material";
 
 import { IconChevronLeft, IconChevronRight } from "@/ui/icons";
 import LatexTypography from "@/ui/latex-typography";
-import P5SketchFrame from "@/ui/p5-sketch-frame";
+import RichContentRenderer from "@/ui/rich-content-renderer";
 import { useNotifications } from "@/ui/notifications";
 import { useI18n } from "@/ui/i18n";
 
@@ -83,13 +83,13 @@ export default function PracticeSessionView({
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ deckId }),
           });
-            if (!res.ok) {
-              const data = (await res.json().catch(() => null)) as { error?: string } | null;
-              if (!cancelled) {
-                setError(data?.error ?? "errors.could_not_start_session");
-              }
-              return;
+          if (!res.ok) {
+            const data = (await res.json().catch(() => null)) as { error?: string } | null;
+            if (!cancelled) {
+              setError(data?.error ?? "errors.could_not_start_session");
             }
+            return;
+          }
           const data = (await res.json()) as { sessionId?: string };
           if (!data.sessionId) {
             if (!cancelled) {
@@ -135,7 +135,7 @@ export default function PracticeSessionView({
     current.mcqCorrectIndex !== null &&
     current.mcqCorrectIndex >= 0 &&
     current.mcqCorrectIndex < current.mcqOptions.length;
-  const hasP5 = !!current && typeof current.p5Code === "string" && current.p5Code.trim().length > 0;
+  const hasP5 = false; // p5 is now inline in text, no separate handling needed
 
   const [selectedMcqIndex, setSelectedMcqIndex] = useState<number | null>(null);
   useEffect(() => {
@@ -239,17 +239,17 @@ export default function PracticeSessionView({
         sx={{ mb: 2 }}
       >
         <Box sx={{ minWidth: 0 }}>
-            <Typography noWrap variant="h5">
+          <Typography noWrap variant="h5">
             {session?.deckName ?? t("nav.practice")}
-            </Typography>
+          </Typography>
           {session ? (
             <Typography color="text.secondary" variant="body2">
               {session.queueLength === 0
                 ? t("practice.no_flashcards_available")
                 : t("practice.card_of", {
-                    current: Math.min(session.viewIndex + 1, session.queueLength),
-                    total: session.queueLength,
-                  })}
+                  current: Math.min(session.viewIndex + 1, session.queueLength),
+                  total: session.queueLength,
+                })}
             </Typography>
           ) : null}
         </Box>
@@ -325,8 +325,8 @@ export default function PracticeSessionView({
                 width: "100%",
                 cursor:
                   session.state === "intro" ||
-                  (session.state === "front" && !hasMcq) ||
-                  (session.state === "back" && !!current?.answered)
+                    (session.state === "front" && !hasMcq) ||
+                    (session.state === "back" && !!current?.answered)
                     ? "pointer"
                     : "default",
                 userSelect: "none",
@@ -349,20 +349,13 @@ export default function PracticeSessionView({
                   </Typography>
                 ) : session.state === "front" ? (
                   <Stack spacing={2} sx={{ width: "100%" }}>
-                    <LatexTypography
+                    <RichContentRenderer
                       component="div"
                       text={current.front.length > 0 ? current.front : t("practice.empty_front")}
                       variant="h5"
                       sx={{ textAlign: "center" }}
+                      p5Title={t("practice.p5_title")}
                     />
-                    {hasP5 ? (
-                      <P5SketchFrame
-                        code={current.p5Code!}
-                        height={current.p5Height}
-                        title={t("practice.p5_title")}
-                        width={current.p5Width}
-                      />
-                    ) : null}
                     {hasMcq ? (
                       <Stack spacing={1}>
                         {current.mcqOptions!.map((opt, optIdx) => {
@@ -418,19 +411,12 @@ export default function PracticeSessionView({
                   </Stack>
                 ) : session.state === "back" ? (
                   <Stack spacing={2} sx={{ width: "100%" }}>
-                    <LatexTypography
+                    <RichContentRenderer
                       component="div"
                       text={current.front.length > 0 ? current.front : t("practice.empty_front")}
                       variant="h6"
+                      p5Title={t("practice.p5_title")}
                     />
-                    {hasP5 ? (
-                      <P5SketchFrame
-                        code={current.p5Code!}
-                        height={current.p5Height}
-                        title={t("practice.p5_title")}
-                        width={current.p5Width}
-                      />
-                    ) : null}
                     {hasMcq ? (
                       <Stack spacing={1}>
                         {current.mcqOptions!.map((opt, optIdx) => {
@@ -502,8 +488,8 @@ export default function PracticeSessionView({
                           {selectedMcqIndex === null
                             ? t("practice.no_selection")
                             : t("practice.your_selection", {
-                                value: optionLabel(selectedMcqIndex),
-                              })}
+                              value: optionLabel(selectedMcqIndex),
+                            })}
                         </Typography>
                         <Typography color="text.secondary" variant="caption">
                           {t("practice.correct_answer", { value: optionLabel(current.mcqCorrectIndex!) })}
@@ -516,27 +502,21 @@ export default function PracticeSessionView({
                       </Stack>
                     ) : null}
                     <Divider flexItem />
-                    <LatexTypography
+                    <RichContentRenderer
                       component="div"
                       text={current.back.length > 0 ? current.back : t("practice.empty_back")}
                       variant="body1"
+                      p5Title={t("practice.p5_title")}
                     />
                   </Stack>
                 ) : (
                   <Stack spacing={2} sx={{ width: "100%" }}>
-                    <LatexTypography
+                    <RichContentRenderer
                       component="div"
                       text={current.front.length > 0 ? current.front : t("practice.empty_front")}
                       variant="h6"
+                      p5Title={t("practice.p5_title")}
                     />
-                    {hasP5 ? (
-                      <P5SketchFrame
-                        code={current.p5Code!}
-                        height={current.p5Height}
-                        title={t("practice.p5_title")}
-                        width={current.p5Width}
-                      />
-                    ) : null}
                     {hasMcq ? (
                       <Stack spacing={1.25}>
                         {current.mcqOptions!.map((opt, optIdx) => {
@@ -582,8 +562,8 @@ export default function PracticeSessionView({
                           {selectedMcqIndex === null
                             ? t("practice.no_selection")
                             : t("practice.your_selection", {
-                                value: optionLabel(selectedMcqIndex),
-                              })}
+                              value: optionLabel(selectedMcqIndex),
+                            })}
                         </Typography>
                         <Typography color="text.secondary" variant="caption">
                           {t("practice.correct_answer", { value: optionLabel(current.mcqCorrectIndex!) })}
@@ -591,10 +571,11 @@ export default function PracticeSessionView({
                       </Stack>
                     ) : null}
                     <Divider flexItem />
-                    <LatexTypography
+                    <RichContentRenderer
                       component="div"
                       text={current.back.length > 0 ? current.back : t("practice.empty_back")}
                       variant="body1"
+                      p5Title={t("practice.p5_title")}
                     />
                     {current.answered ? (
                       <Typography color="text.secondary" variant="caption">

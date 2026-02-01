@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 
 const MAX_DECK_IMPORT_BYTES = 10 * 1024 * 1024;
 
-const importFlashcardTextSchema = z.string().max(4000);
+const importFlashcardTextSchema = z.string().max(50000);
 const importFlashcardKindSchema = z.string().max(32).optional();
 
 const importFlashcardMcqSchema = z

@@ -57,7 +57,7 @@ export const setDeckArchivedSchema = z.object({
   archived: z.boolean(),
 });
 
-export const flashcardTextSchema = z.string().trim().min(1).max(4000);
+export const flashcardTextSchema = z.string().trim().min(1).max(50000);
 
 export const flashcardKindSchema = z.enum(["basic", "mcq"]);
 
@@ -118,7 +118,10 @@ export const openrouterModelSchema = z.string().max(128);
 export const openrouterPromptSchema = z.string().max(8000);
 
 export const updateOpenrouterSettingsSchema = z.object({
+  provider: z.enum(["openrouter", "cerebras", "groq"]).optional(),
   apiKey: openrouterApiKeySchema,
+  cerebrasApiKey: openrouterApiKeySchema.optional(),
+  groqApiKey: openrouterApiKeySchema.optional(),
   model: openrouterModelSchema,
   onlyFreeModels: z.boolean(),
   systemPrompt: openrouterPromptSchema,
@@ -138,6 +141,7 @@ export const updateOpenrouterSettingsSchema = z.object({
 });
 
 export const createAiDeckJobSchema = z.object({
-  prompt: z.string().trim().min(1).max(4000),
+  prompt: z.string().trim().min(1).max(50000),
   mode: z.enum(["add", "edit"]).optional(),
+  youtubeUrl: z.string().max(500).optional(),
 });

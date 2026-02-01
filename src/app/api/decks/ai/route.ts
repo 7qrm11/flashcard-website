@@ -5,6 +5,8 @@ import { startAiDeckJob } from "@/server/ai-deck-worker";
 import { getPool } from "@/server/db";
 import { publishUserEvent } from "@/server/events";
 import { serverLog } from "@/server/log";
+import { extractPdfText } from "@/server/pdf-parser";
+import { fetchYoutubeTranscript } from "@/server/youtube-transcript";
 import {
   normalizeOpenrouterFlashcardPrompt,
   normalizeOpenrouterSystemPrompt,
@@ -14,27 +16,126 @@ import { createAiDeckJobSchema } from "@/shared/validation";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const MAX_PDF_SIZE = 100 * 1024 * 1024; // 100mb
+
+type SourceInfo = {
+  type: "pdf" | "youtube" | null;
+  name: string | null;
+  content: string | null;
+};
+
+async function parseRequest(request: Request): Promise<
+  | { ok: true; prompt: string; source: SourceInfo }
+  | { ok: false; error: string; status: number }
+> {
+  const contentType = request.headers.get("content-type") ?? "";
+
+  // handle multipart form data (pdf upload)
+  if (contentType.includes("multipart/form-data")) {
+    let formData: FormData;
+    try {
+      formData = await request.formData();
+    } catch {
+      return { ok: false, error: "invalid form data", status: 400 };
+    }
+
+    const prompt = String(formData.get("prompt") ?? "").trim();
+    if (prompt.length < 1 || prompt.length > 50000) {
+      return { ok: false, error: "invalid input", status: 400 };
+    }
+
+    const file = formData.get("pdf");
+    if (file && file instanceof File) {
+      if (file.size > MAX_PDF_SIZE) {
+        return { ok: false, error: "pdf file is too large", status: 400 };
+      }
+
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const result = await extractPdfText(buffer);
+
+      if (!result.ok) {
+        return { ok: false, error: result.error, status: 400 };
+      }
+
+      return {
+        ok: true,
+        prompt,
+        source: {
+          type: "pdf",
+          name: file.name || "uploaded.pdf",
+          content: result.text,
+        },
+      };
+    }
+
+    // no pdf file, just prompt
+    return {
+      ok: true,
+      prompt,
+      source: { type: null, name: null, content: null },
+    };
+  }
+
+  // handle json (text prompt or youtube url)
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return { ok: false, error: "invalid request", status: 400 };
+  }
+
+  const parsed = createAiDeckJobSchema.safeParse(body);
+  if (!parsed.success) {
+    return { ok: false, error: "invalid input", status: 400 };
+  }
+
+  const prompt = parsed.data.prompt.trim();
+
+  // check for youtube url
+  if (parsed.data.youtubeUrl && parsed.data.youtubeUrl.trim().length > 0) {
+    const result = await fetchYoutubeTranscript(parsed.data.youtubeUrl);
+
+    if (!result.ok) {
+      return { ok: false, error: result.error, status: 400 };
+    }
+
+    return {
+      ok: true,
+      prompt,
+      source: {
+        type: "youtube",
+        name: result.videoId,
+        content: result.text,
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    prompt,
+    source: { type: null, name: null, content: null },
+  };
+}
+
 export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "invalid request" }, { status: 400 });
+  const parseResult = await parseRequest(request);
+  if (!parseResult.ok) {
+    return NextResponse.json({ error: parseResult.error }, { status: parseResult.status });
   }
 
-  const parsed = createAiDeckJobSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: "invalid input" }, { status: 400 });
-  }
+  const { prompt, source } = parseResult;
 
   serverLog("info", "ai deck create: request", {
     userId: user.id,
-    promptLength: parsed.data.prompt.trim().length,
+    promptLength: prompt.length,
+    sourceType: source.type,
+    sourceName: source.name,
+    sourceContentLength: source.content?.length ?? 0,
   });
 
   const pool = getPool();
@@ -56,11 +157,11 @@ export async function POST(request: Request) {
   );
   const settings = settingsRes.rows[0] as
     | {
-        openrouter_api_key: string | null;
-        openrouter_model: string | null;
-        openrouter_system_prompt: string;
-        openrouter_flashcard_prompt: string;
-      }
+      openrouter_api_key: string | null;
+      openrouter_model: string | null;
+      openrouter_system_prompt: string;
+      openrouter_flashcard_prompt: string;
+    }
     | undefined;
 
   if (!settings?.openrouter_api_key || settings.openrouter_api_key.trim().length === 0) {
@@ -109,21 +210,24 @@ export async function POST(request: Request) {
   const insertRes = await pool.query(
     `
       insert into ai_deck_jobs
-        (user_id, status, prompt, model, system_prompt, flashcard_prompt, attempt_count, started_at)
-      values ($1, 'running', $2, $3, $4, $5, 1, now())
+        (user_id, status, prompt, model, system_prompt, flashcard_prompt, attempt_count, started_at, source_type, source_name, source_content)
+      values ($1, 'running', $2, $3, $4, $5, 1, now(), $6, $7, $8)
       returning id
     `,
     [
       user.id,
-      parsed.data.prompt.trim(),
+      prompt,
       settings.openrouter_model.trim(),
       systemPrompt,
       flashcardPrompt,
+      source.type,
+      source.name,
+      source.content,
     ],
   );
 
   const jobId = String(insertRes.rows[0]?.id);
-  serverLog("info", "ai deck create: started", { userId: user.id, jobId });
+  serverLog("info", "ai deck create: started", { userId: user.id, jobId, sourceType: source.type });
   startAiDeckJob(jobId);
   publishUserEvent(user.id, { type: "ai_deck_job_changed", jobId });
 

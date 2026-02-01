@@ -23,6 +23,8 @@ import {
   Radio,
   RadioGroup,
   Stack,
+  Tab,
+  Tabs,
   TextField,
   ToggleButton,
   ToggleButtonGroup,
@@ -111,6 +113,10 @@ export default function DeckView({
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiSubmitting, setAiSubmitting] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [aiSourceType, setAiSourceType] = useState<"text" | "pdf" | "youtube">("text");
+  const [aiYoutubeUrl, setAiYoutubeUrl] = useState("");
+  const [aiPdfFile, setAiPdfFile] = useState<File | null>(null);
+  const aiFileInputRef = useRef<HTMLInputElement>(null);
 
   const [search, setSearch] = useState(query);
   useEffect(() => {
@@ -229,17 +235,17 @@ export default function DeckView({
 
   const cardSummaryText = useMemo(() => {
     const map = new Map<string, string>();
-      for (const card of cards) {
-        const trimmed = card.front.trim();
-        const label =
-          card.kind === "mcq"
-            ? t("deck.summary_prefix_mcq")
-            : "";
-        map.set(
-          card.id,
-          trimmed.length > 0 ? `${label}${trimmed}` : `${label}${t("deck.empty_flashcard")}`,
-        );
-      }
+    for (const card of cards) {
+      const trimmed = card.front.trim();
+      const label =
+        card.kind === "mcq"
+          ? t("deck.summary_prefix_mcq")
+          : "";
+      map.set(
+        card.id,
+        trimmed.length > 0 ? `${label}${trimmed}` : `${label}${t("deck.empty_flashcard")}`,
+      );
+    }
     return map;
   }, [cards, t]);
 
@@ -354,7 +360,7 @@ export default function DeckView({
     saveTimers.current.set(cardId, timer);
   }
 
-function patchCard(
+  function patchCard(
     cardId: string,
     patch: Partial<
       Pick<
@@ -504,7 +510,7 @@ function patchCard(
     }
 
     const trimmed = aiPrompt.trim();
-    if (trimmed.length < 1 || trimmed.length > 4000) {
+    if (trimmed.length < 1 || trimmed.length > 50000) {
       setAiError("errors.prompt_length");
       return;
     }
@@ -512,11 +518,35 @@ function patchCard(
     setAiSubmitting(true);
     setAiError(null);
     try {
-      const res = await fetch(`/api/decks/${encodeURIComponent(deck.id)}/ai`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt: trimmed, mode: aiMode }),
-      }).catch(() => null);
+      let res: Response | null = null;
+
+      if (aiSourceType === "pdf" && aiPdfFile) {
+        const formData = new FormData();
+        formData.append("prompt", trimmed);
+        formData.append("mode", aiMode);
+        formData.append("pdf", aiPdfFile);
+
+        res = await fetch(`/api/decks/${encodeURIComponent(deck.id)}/ai`, {
+          method: "POST",
+          body: formData,
+        }).catch(() => null);
+      } else if (aiSourceType === "youtube" && aiYoutubeUrl.trim()) {
+        res = await fetch(`/api/decks/${encodeURIComponent(deck.id)}/ai`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            prompt: trimmed,
+            mode: aiMode,
+            youtubeUrl: aiYoutubeUrl.trim(),
+          }),
+        }).catch(() => null);
+      } else {
+        res = await fetch(`/api/decks/${encodeURIComponent(deck.id)}/ai`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ prompt: trimmed, mode: aiMode }),
+        }).catch(() => null);
+      }
 
       if (!res || !res.ok) {
         const data = (await res?.json().catch(() => null)) as { error?: string } | null;
@@ -526,6 +556,9 @@ function patchCard(
 
       setAiPrompt("");
       setAiMode("add");
+      setAiSourceType("text");
+      setAiYoutubeUrl("");
+      setAiPdfFile(null);
       setAiDialogOpen(false);
       router.refresh();
     } finally {
@@ -1132,8 +1165,65 @@ function patchCard(
             <ToggleButton value="add">{t("deck.ai_mode_add_new")}</ToggleButton>
             <ToggleButton value="edit">{t("deck.ai_mode_edit_existing")}</ToggleButton>
           </ToggleButtonGroup>
+          <Tabs
+            value={aiSourceType}
+            onChange={(_, v) => setAiSourceType(v as "text" | "pdf" | "youtube")}
+            sx={{ mt: 2 }}
+          >
+            <Tab label={t("deck.ai_source_text")} value="text" />
+            <Tab label="PDF" value="pdf" />
+            <Tab label="YouTube" value="youtube" />
+          </Tabs>
+          {aiSourceType === "pdf" && (
+            <Box
+              onDrop={(e) => {
+                e.preventDefault();
+                const file = e.dataTransfer.files?.[0];
+                if (file && file.type === "application/pdf") {
+                  setAiPdfFile(file);
+                }
+              }}
+              onDragOver={(e) => e.preventDefault()}
+              sx={{
+                border: "2px dashed",
+                borderColor: "divider",
+                borderRadius: 1,
+                p: 3,
+                textAlign: "center",
+                mt: 2,
+                cursor: "pointer",
+                "&:hover": { borderColor: "primary.main" },
+              }}
+              onClick={() => aiFileInputRef.current?.click()}
+            >
+              <input
+                ref={aiFileInputRef}
+                type="file"
+                accept=".pdf,application/pdf"
+                onChange={(e) => setAiPdfFile(e.target.files?.[0] ?? null)}
+                style={{ display: "none" }}
+              />
+              {aiPdfFile ? (
+                <Typography>{aiPdfFile.name}</Typography>
+              ) : (
+                <Typography color="text.secondary">
+                  {t("deck.drop_pdf_here")}
+                </Typography>
+              )}
+            </Box>
+          )}
+          {aiSourceType === "youtube" && (
+            <TextField
+              label={t("deck.enter_youtube_url")}
+              value={aiYoutubeUrl}
+              onChange={(e) => setAiYoutubeUrl(e.target.value)}
+              fullWidth
+              placeholder="https://youtube.com/watch?v=..."
+              sx={{ mt: 2 }}
+            />
+          )}
           <TextField
-            autoFocus
+            autoFocus={aiSourceType === "text"}
             label={t("deck.ai_prompt_label")}
             multiline
             minRows={4}

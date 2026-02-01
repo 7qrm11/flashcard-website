@@ -199,7 +199,10 @@ function valueToLogSliderWithZero(value: number, min: number, max: number) {
 }
 
 export default function AiSettingsView({
+  aiProvider,
   openrouterApiKey,
+  cerebrasApiKey,
+  groqApiKey,
   openrouterModel,
   openrouterOnlyFreeModels,
   openrouterSystemPrompt,
@@ -207,7 +210,10 @@ export default function AiSettingsView({
   openrouterParams,
   aiLanguageLockEnabled,
 }: Readonly<{
+  aiProvider: "openrouter" | "cerebras" | "groq";
   openrouterApiKey: string;
+  cerebrasApiKey: string;
+  groqApiKey: string;
   openrouterModel: string;
   openrouterOnlyFreeModels: boolean;
   openrouterSystemPrompt: string;
@@ -219,7 +225,10 @@ export default function AiSettingsView({
   const { notifyError } = useNotifications();
   const { t } = useI18n();
 
+  const [provider, setProvider] = useState<"openrouter" | "cerebras" | "groq">(aiProvider);
   const [orApiKey, setOrApiKey] = useState(openrouterApiKey);
+  const [cereApiKey, setCereApiKey] = useState(cerebrasApiKey);
+  const [grqApiKey, setGrqApiKey] = useState(groqApiKey);
   const [orModel, setOrModel] = useState(openrouterModel);
   const [orOnlyFree, setOrOnlyFree] = useState(openrouterOnlyFreeModels);
   const [orSystemPrompt, setOrSystemPrompt] = useState(openrouterSystemPrompt);
@@ -478,7 +487,10 @@ export default function AiSettingsView({
         headers: { "content-type": "application/json" },
         signal: controller.signal,
         body: JSON.stringify({
+          provider,
           apiKey,
+          cerebrasApiKey: cereApiKey.trim(),
+          groqApiKey: grqApiKey.trim(),
           model,
           onlyFreeModels: snapshot.onlyFreeModels,
           systemPrompt,
@@ -538,11 +550,39 @@ export default function AiSettingsView({
       </Typography>
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
         <TextField
-          label={t("settings.openrouter_api_key")}
-          onChange={(e) => setOrApiKey(e.target.value)}
-          type="password"
-          value={orApiKey}
-        />
+          label={t("settings.ai_provider")}
+          select
+          value={provider}
+          onChange={(e) => setProvider(e.target.value as "openrouter" | "cerebras" | "groq")}
+        >
+          <MenuItem value="openrouter">OpenRouter</MenuItem>
+          <MenuItem value="cerebras">Cerebras</MenuItem>
+          <MenuItem value="groq">Groq</MenuItem>
+        </TextField>
+        {provider === "openrouter" && (
+          <TextField
+            label={t("settings.openrouter_api_key")}
+            onChange={(e) => setOrApiKey(e.target.value)}
+            type="password"
+            value={orApiKey}
+          />
+        )}
+        {provider === "cerebras" && (
+          <TextField
+            label={t("settings.cerebras_api_key")}
+            onChange={(e) => setCereApiKey(e.target.value)}
+            type="password"
+            value={cereApiKey}
+          />
+        )}
+        {provider === "groq" && (
+          <TextField
+            label={t("settings.groq_api_key")}
+            onChange={(e) => setGrqApiKey(e.target.value)}
+            type="password"
+            value={grqApiKey}
+          />
+        )}
         <FormControlLabel
           control={<Switch checked={orOnlyFree} onChange={(e) => setOrOnlyFree(e.target.checked)} />}
           label={t("settings.show_only_free_models")}
@@ -621,77 +661,77 @@ export default function AiSettingsView({
               disabled?: boolean;
             }>
           > = [
-            {
-              key: "temperature",
-              label: t("settings.temperature"),
-              kind: "linear",
-              min: 0,
-              max: 5,
-              step: 0.01,
-              defaultValue: 0.7,
-              helper: t("hint.range", { min: 0, max: 5 }),
-            },
-            {
-              key: "top_p",
-              label: t("settings.top_p"),
-              kind: "linear",
-              min: 0,
-              max: 1,
-              step: 0.01,
-              defaultValue: 1,
-              helper: t("hint.range", { min: 0, max: 1 }),
-            },
-            {
-              key: "top_k",
-              label: t("settings.top_k"),
-              kind: "log",
-              min: 1,
-              max: 1_000_000,
-              step: 1,
-              defaultValue: 1,
-              helper: t("hint.range", { min: 0, max: "1,000,000" }),
-            },
-            {
-              key: "max_tokens",
-              label: t("settings.max_tokens"),
-              kind: "log",
-              min: tokenMin,
-              max: tokenMax,
-              step: 1,
-              defaultValue: tokenMin,
-              helper: t("hint.range", { min: 1, max: tokenMax.toLocaleString() }),
-            },
-            {
-              key: "frequency_penalty",
-              label: t("settings.frequency_penalty"),
-              kind: "linear",
-              min: -2,
-              max: 2,
-              step: 0.01,
-              defaultValue: 0,
-              helper: t("hint.range_to", { min: -2, max: 2 }),
-            },
-            {
-              key: "presence_penalty",
-              label: t("settings.presence_penalty"),
-              kind: "linear",
-              min: -2,
-              max: 2,
-              step: 0.01,
-              defaultValue: 0,
-              helper: t("hint.range_to", { min: -2, max: 2 }),
-            },
-            {
-              key: "repetition_penalty",
-              label: t("settings.repetition_penalty"),
-              kind: "linear",
-              min: 0,
-              max: 10,
-              step: 0.01,
-              defaultValue: 1,
-              helper: t("hint.range_to", { min: 0, max: 10 }),
-            },
-          ];
+              {
+                key: "temperature",
+                label: t("settings.temperature"),
+                kind: "linear",
+                min: 0,
+                max: 5,
+                step: 0.01,
+                defaultValue: 0.7,
+                helper: t("hint.range", { min: 0, max: 5 }),
+              },
+              {
+                key: "top_p",
+                label: t("settings.top_p"),
+                kind: "linear",
+                min: 0,
+                max: 1,
+                step: 0.01,
+                defaultValue: 1,
+                helper: t("hint.range", { min: 0, max: 1 }),
+              },
+              {
+                key: "top_k",
+                label: t("settings.top_k"),
+                kind: "log",
+                min: 1,
+                max: 1_000_000,
+                step: 1,
+                defaultValue: 1,
+                helper: t("hint.range", { min: 0, max: "1,000,000" }),
+              },
+              {
+                key: "max_tokens",
+                label: t("settings.max_tokens"),
+                kind: "log",
+                min: tokenMin,
+                max: tokenMax,
+                step: 1,
+                defaultValue: tokenMin,
+                helper: t("hint.range", { min: 1, max: tokenMax.toLocaleString() }),
+              },
+              {
+                key: "frequency_penalty",
+                label: t("settings.frequency_penalty"),
+                kind: "linear",
+                min: -2,
+                max: 2,
+                step: 0.01,
+                defaultValue: 0,
+                helper: t("hint.range_to", { min: -2, max: 2 }),
+              },
+              {
+                key: "presence_penalty",
+                label: t("settings.presence_penalty"),
+                kind: "linear",
+                min: -2,
+                max: 2,
+                step: 0.01,
+                defaultValue: 0,
+                helper: t("hint.range_to", { min: -2, max: 2 }),
+              },
+              {
+                key: "repetition_penalty",
+                label: t("settings.repetition_penalty"),
+                kind: "linear",
+                min: 0,
+                max: 10,
+                step: 0.01,
+                defaultValue: 1,
+                helper: t("hint.range_to", { min: 0, max: 10 }),
+              },
+            ];
 
           const visible = controls.filter((c) => supports(String(c.key)));
           if (visible.length === 0) {
@@ -751,7 +791,7 @@ export default function AiSettingsView({
                                 ? Math.max(1, Math.floor(clampNumber(normalizedValue, c.min, c.max)))
                                 : c.key === "top_k"
                                   ? Math.max(0, Math.floor(clampNumber(normalizedValue, 0, c.max)))
-                                : clampNumber(normalizedValue, c.min, c.max);
+                                  : clampNumber(normalizedValue, c.min, c.max);
                             next[c.key] = clamped;
                             return next;
                           });
@@ -784,10 +824,10 @@ export default function AiSettingsView({
                             : nextValueRaw;
                         setOrParams((prev) => ({ ...prev, [c.key]: nextValue }));
                       }}
-                        step={c.kind === "log" ? 1 : c.step}
-                        value={sliderValue}
-                        valueLabelDisplay="auto"
-                        disabled={Boolean(c.disabled)}
+                      step={c.kind === "log" ? 1 : c.step}
+                      value={sliderValue}
+                      valueLabelDisplay="auto"
+                      disabled={Boolean(c.disabled)}
                     />
                     <Typography color="text.secondary" variant="caption">
                       {value === null ? t("settings.using_model_default") : c.helper}

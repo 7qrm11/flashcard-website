@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/server/auth";
 import { getPool } from "@/server/db";
+import { encrypt } from "@/server/encryption";
 import { publishUserEvent } from "@/server/events";
 import {
   normalizeOpenrouterFlashcardPrompt,
@@ -29,7 +30,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid input" }, { status: 400 });
   }
 
+  const provider = parsed.data.provider ?? null;
   const apiKey = parsed.data.apiKey.trim();
+  const cerebrasApiKey = parsed.data.cerebrasApiKey?.trim() ?? null;
+  const groqApiKey = parsed.data.groqApiKey?.trim() ?? null;
   const model = parsed.data.model.trim();
   const systemPrompt = normalizeOpenrouterSystemPrompt(parsed.data.systemPrompt);
   const flashcardPrompt = normalizeOpenrouterFlashcardPrompt(parsed.data.flashcardPrompt);
@@ -76,17 +80,23 @@ export async function POST(request: Request) {
           openrouter_system_prompt = $4,
           openrouter_flashcard_prompt = $5,
           openrouter_params = coalesce($6::jsonb, openrouter_params),
-          ai_language_lock_enabled = coalesce($7, ai_language_lock_enabled)
-      where id = $8
+          ai_language_lock_enabled = coalesce($7, ai_language_lock_enabled),
+          ai_provider = coalesce($8, ai_provider),
+          cerebras_api_key = coalesce($9, cerebras_api_key),
+          groq_api_key = coalesce($10, groq_api_key)
+      where id = $11
     `,
     [
-      apiKey.length > 0 ? apiKey : null,
+      apiKey.length > 0 ? encrypt(apiKey) : null,
       model.length > 0 ? model : null,
       Boolean(parsed.data.onlyFreeModels),
       systemPrompt,
       flashcardPrompt,
       paramsJson ? await paramsJson : null,
       languageLockEnabled,
+      provider,
+      cerebrasApiKey && cerebrasApiKey.length > 0 ? encrypt(cerebrasApiKey) : null,
+      groqApiKey && groqApiKey.length > 0 ? encrypt(groqApiKey) : null,
       user.id,
     ],
   );

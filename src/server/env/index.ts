@@ -5,6 +5,7 @@ import { z } from "zod";
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   NODE_ENV: z.enum(["development", "test", "production"]).optional(),
+  ENCRYPTION_SECRET: z.string().min(32).optional(),
 
   OPENROUTER_SITE_URL: z.string().optional(),
   NEXT_PUBLIC_SITE_URL: z.string().optional(),
